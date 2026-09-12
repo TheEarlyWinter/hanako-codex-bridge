@@ -1,6 +1,6 @@
 {
   "name": "hanako-codex-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local MCP bridge for delegating tasks between Hanako and Codex.",
   "type": "module",
   "private": false,
@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "check": "node --check bridge.mjs"
+    "check": "node --check bridge.mjs",
+    "test": "node --test"
   }
 }

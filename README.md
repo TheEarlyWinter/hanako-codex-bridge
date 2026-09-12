@@ -7,8 +7,12 @@
 - Hanako 调用 codex_task：启动一次性的本机 Codex 子任务。
 - Hanako 调用 codex_new_thread：通过 Codex app-server 创建一个持久的新 Codex 对话，并发送首轮任务。
 - Codex 调用 hanako_task：创建一次本机 Hanako detached session。
-- 任一侧调用 bridge_status：检查 Hanako 服务和 Codex 可执行文件是否可发现。
+- 任一侧调用 bridge_status：实际探测 Hanako 本地端口和 Codex 可执行文件，不返回本机路径或令牌。
 - 不复制完整对话历史；每次委派只发送调用方提供的任务文字。
+- Hanako 全局 WebSocket 事件按 detached session 身份过滤；不会把其他会话的文字、确认或结束事件串进当前任务。
+- MCP 支持标准初始化、取消通知和输入流关闭清理；Codex 输出支持跨 chunk 的 JSONL。
+- 委派有并发上限、重复任务抑制和下游 Codex 防重入标记，避免无限循环委派。
+- 为覆盖多个 MCP 客户端进程，Hanako detached 委派会持有一个本机保护租约；租约期间其他桥接进程的委派会被拒绝，避免 Hanako→桥接器→Hanako 的跨进程循环。
 
 ## 重要安全说明
 
@@ -19,6 +23,8 @@
 - 委派任务可以读写本机文件、执行命令、安装软件并访问网络。
 - codex_new_thread 创建的 Codex 对话使用持久 thread；调用完成后可以在 Codex 桌面端的任务列表中继续查看。
 - 桥接器会读取 Hanako 本地服务令牌，但只保存在内存中，不写入日志、不返回给模型。
+- `bridge_status` 只返回 `reachable/unconfigured`、`available/unavailable` 等状态，不暴露 executable、工作目录、端口或配置文件路径。
+- 默认最多同时运行 4 个委派；传给 Codex 的子进程会带有防重入标记，不能再通过本桥接器发起下一轮委派。
 
 只把它接入你信任的 Hanako/Codex 实例，并只委派可信任务。不要把本服务暴露到局域网或公网，也不要把 server-info.json、访问令牌或个人配置提交到仓库。
 
@@ -109,6 +115,10 @@ BRIDGE_DEFAULT_CWD       Codex 子任务默认工作目录
 CODEX_BRIDGE_TIMEOUT_MS  Codex 子任务超时，默认 1200000
 CODEX_THREAD_TIMEOUT_MS  持久 Codex 新对话首轮超时，默认跟随 CODEX_BRIDGE_TIMEOUT_MS
 HANAKO_BRIDGE_TIMEOUT_MS Hanako 子任务超时，默认 900000
+BRIDGE_MAX_CONCURRENT    同一桥接进程最多同时运行的委派数，默认 4；Hanako detached 委派另有本机跨进程保护租约
+BRIDGE_MAX_HOPS          允许的委派层数，默认 1；下游 Codex 进程会被硬性禁止再次进入桥接器
+HANAKO_CODEX_BRIDGE_HOP  内部使用，不建议手动设置
+HANAKO_CODEX_BRIDGE_NO_REENTRY 内部使用；值为 1 时拒绝所有委派
 ~~~
 
 例如在 PowerShell 中：
@@ -118,7 +128,7 @@ $env:BRIDGE_DEFAULT_CWD = "C:\Work\my-project"
 node C:\Tools\hanako-codex-bridge\bridge.mjs
 ~~~
 
-## 三个 MCP 工具
+## 四个 MCP 工具
 
 ### 自然语言触发
 
@@ -139,7 +149,7 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 ### bridge_status
 
-查看桥接器、Hanako 本地服务和 Codex 可执行文件状态。不会返回 Hanako 令牌。
+查看桥接器、Hanako 本地服务和 Codex 可执行文件状态。会做本机连通性/版本探测，不会返回令牌、端口或绝对路径。
 
 ### codex_task
 
@@ -193,7 +203,7 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 安装完成后按这个顺序验证：
 
-1. 调用 bridge_status，确认 Hanako server 与 Codex executable 都是 available。
+1. 调用 bridge_status，确认 `hanakoServer` 为 `reachable`、`codex` 为 `available`。
 2. 从 Codex 调用 hanako_task，让 Hanako 只回复一个固定短语。
 3. 从 Hanako 调用 codex_task，让 Codex 只回复另一个固定短语。
 4. 确认两边都能收到结果后，再委派真实任务。
@@ -220,13 +230,14 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 ## 开发
 
-本项目没有第三方 npm 依赖。可以使用下面的命令做语法检查：
+本项目没有第三方 npm 依赖。可以使用下面的命令做语法检查和自动测试：
 
 ~~~powershell
 node --check bridge.mjs
+npm test
 ~~~
 
-桥接器使用 JSON-RPC over stdio 与 MCP 客户端通信；Hanako 一侧使用本机 HTTP API 和 WebSocket，Codex 一侧同时支持一次性的 `codex exec` 子进程和通过 `codex app-server` 创建持久 thread。
+桥接器使用 JSON-RPC over stdio 与 MCP 客户端通信；Hanako 一侧使用本机 HTTP API 和 WebSocket，Codex 一侧同时支持一次性的 `codex exec` 子进程和通过 `codex app-server` 创建持久 thread。仓库包含 GitHub Actions CI，会在 Node.js 22/24 及 Windows、macOS、Linux 上运行语法检查和测试。
 
 ## 许可
 
