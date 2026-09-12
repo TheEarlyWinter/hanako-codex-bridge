@@ -42,6 +42,18 @@ C:\Tools\hanako-codex-bridge\bridge.mjs
 
 不要把个人 Codex 配置、Hanako server-info.json 或访问令牌复制进这个目录。
 
+## 给其他人使用
+
+这个 GitHub 仓库可以公开分享，但它不是一个在线中转服务。别人克隆后需要在自己的电脑上完成本地安装和配置：
+
+1. 安装 Node.js 22+、Codex CLI 和 Hanako，并分别完成登录。
+2. 把 `bridge.mjs` 放在对方自己的固定目录。
+3. 在 Codex 和 Hanako 的 MCP 设置中，把 `bridge.mjs` 的示例路径替换成对方自己的绝对路径。
+4. 确认 Hanako 正在运行，并让桥接器读取对方自己的 `%USERPROFILE%\\.hanako\\server-info.json`。
+5. 委派项目任务时使用对方自己的项目目录，或设置 `BRIDGE_DEFAULT_CWD`。
+
+仓库没有包含个人账号令牌、`server-info.json`、Codex 配置或某台电脑的用户目录。代码会根据当前用户的 `USERPROFILE`/`HOME` 查找本地配置；README 中的 `C:\\Tools`、`/opt` 等只是安装示例。桥接器默认只连接本机 `127.0.0.1`，不会因为分享 GitHub 链接而替别人连接到你的 Hanako 或 Codex。
+
 ## 配置 Codex
 
 在 Codex 的 config.toml 中添加一个 MCP server。把下面的路径改成 bridge.mjs 的实际路径：
