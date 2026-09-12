@@ -14,6 +14,7 @@ const defaultCwd = process.env.BRIDGE_DEFAULT_CWD || process.cwd();
 const codexExecutableHint = process.env.CODEX_EXECUTABLE
   || (process.platform === "win32" ? "codex.exe" : "codex");
 const codexTimeoutMs = Number(process.env.CODEX_BRIDGE_TIMEOUT_MS || 20 * 60 * 1000);
+const codexThreadTimeoutMs = Number(process.env.CODEX_THREAD_TIMEOUT_MS || codexTimeoutMs);
 const hanakoTimeoutMs = Number(process.env.HANAKO_BRIDGE_TIMEOUT_MS || 15 * 60 * 1000);
 
 function log(...values) {
@@ -387,6 +388,233 @@ async function runCodexTask({ task, cwd = defaultCwd }) {
   });
 }
 
+function extractCodexAgentText(item) {
+  if (!item || typeof item !== "object") return "";
+  if (item.type === "agentMessage" || item.type === "agent_message") {
+    return typeof item.text === "string" ? item.text.trim() : "";
+  }
+  if (item.item && typeof item.item === "object") return extractCodexAgentText(item.item);
+  return "";
+}
+
+function extractCodexTurnText(turn) {
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  const messages = items.map(extractCodexAgentText).filter(Boolean);
+  return messages.at(-1) || "";
+}
+
+async function openCodexAppServer() {
+  const executable = await resolveCodexExecutable();
+  let child;
+  try {
+    child = spawn(executable, ["app-server", "--stdio"], {
+      cwd: defaultCwd,
+      env: getCodexEnvironment(),
+      windowsHide: true,
+      shell: process.platform === "win32" && /\.cmd$/i.test(executable),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (error) {
+    throw new Error(`无法启动 Codex app-server：${safeText(error?.message || error, 1200)}`);
+  }
+
+  let buffer = "";
+  let nextId = 1;
+  let closed = false;
+  let stderr = "";
+  const pending = new Map();
+  const eventListeners = new Set();
+
+  const rejectPending = (error) => {
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(error);
+    }
+    pending.clear();
+  };
+
+  const handleLine = (line) => {
+    if (!line.trim()) return;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      log(`Codex app-server 返回了无法解析的 JSON：${safeText(line, 1200)}`);
+      return;
+    }
+    if (message.id !== undefined && pending.has(message.id)) {
+      const entry = pending.get(message.id);
+      pending.delete(message.id);
+      clearTimeout(entry.timer);
+      if (message.error) entry.reject(new Error(safeText(message.error.message || message.error, 2000)));
+      else entry.resolve(message.result);
+      return;
+    }
+    for (const listener of eventListeners) listener(message);
+  };
+
+  child.stdout.on("data", (chunk) => {
+    buffer += String(chunk);
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newlineIndex).replace(/\r$/, "");
+      buffer = buffer.slice(newlineIndex + 1);
+      handleLine(line);
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+    if (stderr.length > 6000) stderr = stderr.slice(-6000);
+  });
+  child.on("error", (error) => {
+    if (!closed) rejectPending(new Error(`Codex app-server 失败：${safeText(error?.message || error, 1600)}`));
+  });
+  child.on("close", (code) => {
+    closed = true;
+    const detail = stderr.replace(/\r?\n/g, " ").trim();
+    rejectPending(new Error(`Codex app-server 已退出（退出码 ${code}）${detail ? `：${safeText(detail, 2200)}` : "。"}`));
+  });
+
+  const request = (method, params, timeoutMs = codexThreadTimeoutMs) => new Promise((resolve, reject) => {
+    if (closed) {
+      reject(new Error("Codex app-server 已关闭。"));
+      return;
+    }
+    const id = nextId++;
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`Codex app-server 请求超时：${method}`));
+    }, timeoutMs);
+    pending.set(id, { resolve, reject, timer });
+    try {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(new Error(`无法写入 Codex app-server：${safeText(error?.message || error, 1200)}`));
+    }
+  });
+
+  const notify = (method, params) => {
+    if (closed) return;
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
+  };
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    try {
+      child.stdin.end();
+    } catch {
+      // Ignore shutdown races.
+    }
+    setTimeout(() => {
+      if (!child.killed) {
+        try {
+          child.kill();
+        } catch {
+          // Ignore a process that already exited.
+        }
+      }
+    }, 1500).unref();
+  };
+
+  return {
+    request,
+    notify,
+    onEvent(listener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+    close,
+  };
+}
+
+async function runCodexNewThread({ task, cwd = defaultCwd, model, effort }) {
+  const resolvedCwd = path.resolve(cwd);
+  const client = await openCodexAppServer();
+  let threadId = "";
+  let finalText = "";
+  let finished = false;
+
+  const finishedPromise = new Promise((resolve, reject) => {
+    const finish = (error, value) => {
+      if (finished) return;
+      finished = true;
+      unsubscribe?.();
+      if (error) reject(error);
+      else resolve(value);
+    };
+
+    var unsubscribe;
+    unsubscribe = client.onEvent((message) => {
+      const method = String(message?.method || "");
+      const params = message?.params || {};
+      if (method === "item/completed" || method === "item_completed") {
+        const text = extractCodexAgentText(params.item || params);
+        if (text) finalText = text;
+        return;
+      }
+      if (method === "turn/completed" || method === "turn_completed") {
+        if (params.threadId && threadId && params.threadId !== threadId) return;
+        const turn = params.turn || params;
+        const text = extractCodexTurnText(turn);
+        if (text) finalText = text;
+        if (turn.status === "failed" || turn.error) {
+          finish(new Error(turn.error?.message || "Codex 新任务执行失败。"));
+        } else if (turn.status === "interrupted") {
+          finish(new Error("Codex 新任务被中断。"));
+        } else {
+          finish(null, finalText);
+        }
+      }
+    });
+  });
+
+  try {
+    await client.request("initialize", {
+      clientInfo: {
+        name: "hanako-codex-bridge",
+        title: "Hanako → Codex thread bridge",
+        version: "0.2.0",
+      },
+      capabilities: {},
+    });
+    client.notify("initialized", {});
+
+    const threadParams = {
+      cwd: resolvedCwd,
+      ephemeral: false,
+      threadSource: "hanako-mcp",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+    };
+    if (model) threadParams.model = model;
+    const started = await client.request("thread/start", threadParams);
+    threadId = started?.thread?.id || started?.threadId || "";
+    if (!threadId) throw new Error("Codex app-server 没有返回新任务 ID。 ");
+
+    const turnParams = {
+      threadId,
+      input: [{ type: "text", text: task }],
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+    };
+    if (effort) turnParams.effort = effort;
+    await client.request("turn/start", turnParams);
+    const result = await finishedPromise;
+    return JSON.stringify({
+      threadId,
+      status: "completed",
+      result: result || finalText || "Codex 已完成任务，但没有返回文字结果。",
+      cwd: resolvedCwd,
+      persistent: true,
+    }, null, 2);
+  } finally {
+    client.close();
+  }
+}
+
 async function bridgeStatus() {
   let infoStatus = "unavailable";
   try {
@@ -417,6 +645,22 @@ const toolDefinitions = [
       properties: {
         task: { type: "string", description: "要交给 Codex 的任务。" },
         cwd: { type: "string", description: "可选：Codex 读取任务上下文时使用的本地目录。" },
+      },
+      required: ["task"],
+    },
+  },
+  {
+    name: "codex_new_thread",
+    description: "通过 Codex app-server 创建一个持久的新 Codex 对话，并把任务作为首轮消息发送；返回 threadId 和首轮结果。",
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        task: { type: "string", description: "新 Codex 对话的首轮任务。" },
+        cwd: { type: "string", description: "可选：新 Codex 对话使用的本地工作目录。" },
+        model: { type: "string", description: "可选：Codex 模型 ID。" },
+        effort: { type: "string", description: "可选：Codex 推理强度。" },
       },
       required: ["task"],
     },
@@ -460,8 +704,8 @@ async function handleRequest(request) {
     response(id, {
       protocolVersion: request.params?.protocolVersion || "2025-06-18",
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: "hanako-codex-bridge", version: "0.1.0" },
-      instructions: "Local two-way Hanako/Codex task bridge. Delegated tasks run with full local access by explicit user request.",
+      serverInfo: { name: "hanako-codex-bridge", version: "0.2.0" },
+      instructions: "Local two-way Hanako/Codex task bridge. Use codex_new_thread when Hanako must create a persistent Codex conversation. Delegated tasks run with full local access by explicit user request.",
     });
     return;
   }
@@ -486,6 +730,14 @@ async function handleRequest(request) {
     else if (name === "codex_task") {
       if (typeof args.task !== "string" || !args.task.trim()) throw new Error("codex_task 需要非空 task。");
       result = await runCodexTask({ task: args.task, cwd: args.cwd });
+    } else if (name === "codex_new_thread") {
+      if (typeof args.task !== "string" || !args.task.trim()) throw new Error("codex_new_thread 需要非空 task。");
+      result = await runCodexNewThread({
+        task: args.task,
+        cwd: args.cwd,
+        model: args.model,
+        effort: args.effort,
+      });
     } else if (name === "hanako_task") {
       if (typeof args.task !== "string" || !args.task.trim()) throw new Error("hanako_task 需要非空 task。");
       result = await runHanakoTask({ task: args.task, agentId: args.agentId || "hanako" });

@@ -4,7 +4,8 @@
 
 ## 功能
 
-- Hanako 调用 codex_task：启动一次本机 Codex 子任务。
+- Hanako 调用 codex_task：启动一次性的本机 Codex 子任务。
+- Hanako 调用 codex_new_thread：通过 Codex app-server 创建一个持久的新 Codex 对话，并发送首轮任务。
 - Codex 调用 hanako_task：创建一次本机 Hanako detached session。
 - 任一侧调用 bridge_status：检查 Hanako 服务和 Codex 可执行文件是否可发现。
 - 不复制完整对话历史；每次委派只发送调用方提供的任务文字。
@@ -16,6 +17,7 @@
 - Hanako detached session 使用 operate 权限。
 - Codex 子任务使用 --dangerously-bypass-approvals-and-sandbox。
 - 委派任务可以读写本机文件、执行命令、安装软件并访问网络。
+- codex_new_thread 创建的 Codex 对话使用持久 thread；调用完成后可以在 Codex 桌面端的任务列表中继续查看。
 - 桥接器会读取 Hanako 本地服务令牌，但只保存在内存中，不写入日志、不返回给模型。
 
 只把它接入你信任的 Hanako/Codex 实例，并只委派可信任务。不要把本服务暴露到局域网或公网，也不要把 server-info.json、访问令牌或个人配置提交到仓库。
@@ -25,6 +27,7 @@
 - Windows、macOS 或 Linux
 - Node.js 22 或更新版本
 - 已安装并可运行的 Codex CLI
+- Codex CLI 需要支持实验性的 app-server（codex_new_thread 使用该接口创建持久对话）
 - 正在运行的 Hanako，并且本机可读取 Hanako 的 server-info.json
 
 Node.js 22+ 是为了使用内置 WebSocket；桥接器本身不需要 npm 依赖。
@@ -92,6 +95,7 @@ HANAKO_SERVER_INFO       自定义 Hanako server-info.json 路径
 CODEX_EXECUTABLE         自定义 Codex 可执行文件路径
 BRIDGE_DEFAULT_CWD       Codex 子任务默认工作目录
 CODEX_BRIDGE_TIMEOUT_MS  Codex 子任务超时，默认 1200000
+CODEX_THREAD_TIMEOUT_MS  持久 Codex 新对话首轮超时，默认跟随 CODEX_BRIDGE_TIMEOUT_MS
 HANAKO_BRIDGE_TIMEOUT_MS Hanako 子任务超时，默认 900000
 ~~~
 
@@ -132,6 +136,30 @@ node C:\Tools\hanako-codex-bridge\bridge.mjs
 
 任务文本会被转交给另一侧；不要在任务文本中放入密码、令牌或其他不必要的敏感信息。
 
+### codex_new_thread
+
+从 Hanako 创建一个真正持久的 Codex 新任务：
+
+~~~json
+{
+  "task": "检查当前项目的测试状态，并把结论写成简短报告",
+  "cwd": "C:\\Work\\my-project"
+}
+~~~
+
+返回结果类似：
+
+~~~json
+{
+  "threadId": "...",
+  "status": "completed",
+  "result": "...",
+  "persistent": true
+}
+~~~
+
+这里的 `threadId` 是 Codex 的持久任务 ID；它和 `codex_task` 的一次性子进程不同。
+
 ## 验证
 
 安装完成后按这个顺序验证：
@@ -169,7 +197,7 @@ node C:\Tools\hanako-codex-bridge\bridge.mjs
 node --check bridge.mjs
 ~~~
 
-桥接器使用 JSON-RPC over stdio 与 MCP 客户端通信；Hanako 一侧使用本机 HTTP API 和 WebSocket，Codex 一侧启动一次性的 codex exec 子进程。
+桥接器使用 JSON-RPC over stdio 与 MCP 客户端通信；Hanako 一侧使用本机 HTTP API 和 WebSocket，Codex 一侧同时支持一次性的 `codex exec` 子进程和通过 `codex app-server` 创建持久 thread。
 
 ## 许可
 
