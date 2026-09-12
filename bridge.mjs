@@ -637,7 +637,7 @@ async function bridgeStatus() {
 const toolDefinitions = [
   {
     name: "codex_task",
-    description: "以完全访问模式把任务委派给本机 Codex，并返回 Codex 的最终文字结果。",
+    description: "仅在用户明确要求一次性委派并只返回结果时使用；不会创建可继续的 Codex 新对话。",
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     inputSchema: {
       type: "object",
@@ -651,7 +651,7 @@ const toolDefinitions = [
   },
   {
     name: "codex_new_thread",
-    description: "通过 Codex app-server 创建一个持久的新 Codex 对话，并把任务作为首轮消息发送；返回 threadId 和首轮结果。",
+    description: "当用户表达了把任务交给、委派给、转交给、让 Codex 或另一个编码助手处理，或要求另开/新建独立任务或对话时使用。通过 Codex app-server 创建持久新对话，把任务作为首轮消息发送，并返回 threadId 和结果。不要要求用户输入工具名。",
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     inputSchema: {
       type: "object",
@@ -705,7 +705,7 @@ async function handleRequest(request) {
       protocolVersion: request.params?.protocolVersion || "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "hanako-codex-bridge", version: "0.2.0" },
-      instructions: "Local two-way Hanako/Codex task bridge. Use codex_new_thread when Hanako must create a persistent Codex conversation. Delegated tasks run with full local access by explicit user request.",
+      instructions: "当用户表达把任务交给、委派给、转交给、让 Codex 或另一个编码助手处理，或要求另开/新建独立任务或对话时，调用 codex_new_thread 创建持久 Codex 对话；不要要求用户输入工具名。只有用户明确要求一次性返回结果、不要创建新对话时才调用 codex_task。继续已有 Codex 对话需保留原 threadId。委派任务使用完全访问模式。",
     });
     return;
   }

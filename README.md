@@ -108,6 +108,23 @@ node C:\Tools\hanako-codex-bridge\bridge.mjs
 
 ## 三个 MCP 工具
 
+### 自然语言触发
+
+正常使用时不需要输入工具名。在 Hanako 中，只要表达出类似下面的意图即可：
+
+- 把这个任务交给 Codex
+- 让 Codex 处理、检查、修复或开发
+- 把工作转交给另一个编码助手
+- 另开一个独立任务或 Codex 对话
+
+例如：
+
+~~~text
+把这个项目的测试问题转交给 Codex，在 C:\\Work\\my-project 中修复，完成后把结果告诉我。
+~~~
+
+Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明确说“只要一次性结果、不要创建新对话”时，才使用 `codex_task`。
+
 ### bridge_status
 
 查看桥接器、Hanako 本地服务和 Codex 可执行文件状态。不会返回 Hanako 令牌。
