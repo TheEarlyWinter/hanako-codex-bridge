@@ -69,8 +69,7 @@
 
 - Windows、macOS 或 Linux
 - Node.js 22 或更新版本（使用内置 WebSocket，免 `npm install` 依赖）
-- 已安装并可运行的 Codex CLI（如果系统终端输入 `codex` 报 command not found，见下方 Linux 软链接解决方案）
-- Codex CLI 需要支持实验性的 app-server（codex_new_thread 使用该接口创建持久对话）
+- 已安装 **Codex 桌面版**（桌面版客户端内部已经**自带**了 `codex` 核心引擎，**不需要单独下载 CLI**；Linux 下若终端未自动识别命令，见下方软链接说明）
 - 正在运行的 Hanako，并且本机可读取 Hanako 的 server-info.json
 
 Node.js 22+ 是为了使用内置 WebSocket；桥接器本身不需要 npm 依赖。
@@ -87,7 +86,7 @@ C:\Tools\hanako-codex-bridge\bridge.mjs
 
 ## 给其他人使用
 
-1. 安装 Node.js 22+、Codex CLI 和 Hanako，并分别完成登录。
+1. 安装 Node.js 22+、Codex 桌面版和 Hanako，并分别完成登录。
 2. 把 `bridge.mjs` 放在自己的固定目录。
 3. 在 Codex 和 Hanako 的 MCP 设置中，把 `bridge.mjs` 的示例路径替换成对方自己的绝对路径。
 4. 确认 Hanako 正在运行，并让桥接器读取对方自己的 `%USERPROFILE%\\.hanako\\server-info.json`。
@@ -261,8 +260,10 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 ### 找不到 Codex（或 Linux 提示 command not found）
 
-1. **检查 PATH**：终端执行 `codex --version` 确认 CLI 是否已在系统环境变量中。
-2. **Linux 官方桌面版常见路径**：官方安装包常将二进制存放在 `/usr/lib/chatgpt/resources/codex`，并未自动加入 PATH。可运行以下命令创建软链接：
+> **说明**：只要安装了 **Codex 桌面版** 即可，不需要去官网另外找单独的 CLI 安装包。桌面版已经内置了全部核心引擎。
+
+1. **检查 PATH**：终端执行 `codex --version` 确认命令是否已被系统识别。
+2. **Linux 官方桌面版常见路径**：官方安装包通常将内置的 `codex` 二进制存放在 `/usr/lib/chatgpt/resources/codex`，但并未自动写入系统 PATH。运行以下命令创建一条软链接即可：
    ```bash
    # 系统级软链接（需 root 权限）：
    sudo ln -s /usr/lib/chatgpt/resources/codex /usr/local/bin/codex
@@ -270,7 +271,7 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
    # 或当前用户级软链接：
    ln -s /usr/lib/chatgpt/resources/codex ~/.local/bin/codex
    ```
-3. **通过环境变量指定**：如果不想建软链接，可在启动环境或 `.bashrc` 中声明：
+3. **通过环境变量指定**：如果不想建软链接，也可直接在环境或 `.bashrc` 中指向桌面版自带的路径：
    ```bash
    export CODEX_EXECUTABLE=/usr/lib/chatgpt/resources/codex
    ```
