@@ -445,21 +445,40 @@ function isHanakoTerminalMessage(message) {
     || type === "turn_end";
 }
 
-async function runHanakoTask({ task, agentId = "hanako", signal }) {
+async function runHanakoTask({ task, agentId = "hanako", thinkingLevel, model, signal }) {
   const release = beginDelegation("hanako", task, defaultCwd);
   try {
     throwIfAborted(signal);
     const info = await readHanakoInfo();
-    const created = await hanakoRequest(info, "POST", "/api/sessions/new-detached", {
+    const payload = {
       agentId,
       // The caller explicitly requested full access for delegated Hanako work.
       permissionMode: "operate",
       launchContext: null,
       contextAttachments: [],
-    }, { signal });
+    };
+    if (thinkingLevel) payload.thinkingLevel = thinkingLevel;
+    const created = await hanakoRequest(info, "POST", "/api/sessions/new-detached", payload, { signal });
     const { sessionPath, sessionId } = extractSession(created);
     if (!sessionPath && !sessionId) {
       throw new Error("Hanako 没有返回可用的任务会话。");
+    }
+    if (model) {
+      try {
+        const catalog = await hanakoRequest(info, "GET", "/api/models", null, { signal });
+        const targetModel = catalog?.models?.find(
+          (m) => m.id === model || `${m.provider}/${m.id}` === model || m.name?.toLowerCase() === model.toLowerCase()
+        );
+        if (targetModel) {
+          await hanakoRequest(info, "POST", "/api/models/switch", {
+            sessionPath,
+            modelId: targetModel.id,
+            provider: targetModel.provider,
+          }, { signal });
+        }
+      } catch (error) {
+        log(`切换模型失败（将保留 agent 默认模型）：${safeText(error?.message || error, 500)}`);
+      }
     }
     if (typeof WebSocket !== "function") {
       throw new Error("当前 Node.js 不支持 WebSocket，无法连接 Hanako 会话。");
@@ -664,7 +683,7 @@ function parseCodexEvent(line, state) {
   }
 }
 
-async function runCodexTask({ task, cwd = defaultCwd, signal }) {
+async function runCodexTask({ task, cwd = defaultCwd, model, effort, signal }) {
   const resolvedCwd = path.resolve(cwd);
   const release = beginDelegation("codex", task, resolvedCwd);
   try {
@@ -679,8 +698,10 @@ async function runCodexTask({ task, cwd = defaultCwd, signal }) {
       "--skip-git-repo-check",
       "--cd",
       resolvedCwd,
-      "-",
     ];
+    if (model) args.push("-m", model);
+    if (effort) args.push("-c", `model_reasoning_effort="${effort}"`);
+    args.push("-");
 
     return await new Promise((resolve, reject) => {
       let child;
@@ -1065,7 +1086,7 @@ async function runCodexNewThread({ task, cwd = defaultCwd, model, effort, signal
     const threadParams = {
       cwd: resolvedCwd,
       ephemeral: false,
-      threadSource: "hanako-mcp",
+      threadSource: "user",
       sandbox: "danger-full-access",
       approvalPolicy: "never",
     };
@@ -1086,6 +1107,8 @@ async function runCodexNewThread({ task, cwd = defaultCwd, model, effort, signal
     turnId = turnStarted?.turn?.id || turnStarted?.turnId || turnStarted?.turn?.turnId || "";
     throwIfAborted(signal);
     const result = await finishedPromise;
+    await appendToCodexSessionIndex(threadId, task);
+    revealInCodexApp(threadId);
     return JSON.stringify({
       threadId,
       status: "completed",
@@ -1097,6 +1120,37 @@ async function runCodexNewThread({ task, cwd = defaultCwd, model, effort, signal
     cancelWait?.();
     client?.close();
     release();
+  }
+}
+
+async function revealInCodexApp(threadId) {
+  try {
+    const url = `codex://threads/${threadId}`;
+    if (process.platform === "win32") {
+      spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    } else if (process.platform === "darwin") {
+      spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+    } else {
+      spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+    }
+  } catch (error) {
+    log(`无法唤起 Codex 客户端导航：${safeText(error?.message || error, 500)}`);
+  }
+}
+
+async function appendToCodexSessionIndex(threadId, task) {
+  try {
+    const codexHome = process.env.CODEX_HOME || path.join(process.env.USERPROFILE || process.env.HOME || "", ".codex");
+    const indexPath = path.join(codexHome, "session_index.jsonl");
+    const title = task.split("\n")[0].trim().slice(0, 80) || "HanaAgent 委派任务";
+    const line = JSON.stringify({
+      id: threadId,
+      thread_name: title,
+      updated_at: new Date().toISOString(),
+    }) + "\n";
+    await fs.appendFile(indexPath, line, "utf8");
+  } catch (error) {
+    log(`写入 session_index.jsonl 失败：${safeText(error?.message || error, 500)}`);
   }
 }
 
@@ -1199,6 +1253,8 @@ const toolDefinitions = [
       properties: {
         task: { type: "string", description: "要交给 Codex 的任务。" },
         cwd: { type: "string", description: "可选：Codex 读取任务上下文时使用的本地目录。" },
+        model: { type: "string", description: "可选：Codex 模型 ID。" },
+        effort: { type: "string", description: "可选：Codex 推理强度（如 low, medium, high, xhigh, max）。" },
       },
       required: ["task"],
     },
@@ -1214,7 +1270,7 @@ const toolDefinitions = [
         task: { type: "string", description: "新 Codex 对话的首轮任务。" },
         cwd: { type: "string", description: "可选：新 Codex 对话使用的本地工作目录。" },
         model: { type: "string", description: "可选：Codex 模型 ID。" },
-        effort: { type: "string", description: "可选：Codex 推理强度。" },
+        effort: { type: "string", description: "可选：Codex 推理强度（如 low, medium, high, xhigh, max）。" },
       },
       required: ["task"],
     },
@@ -1228,7 +1284,9 @@ const toolDefinitions = [
       additionalProperties: false,
       properties: {
         task: { type: "string", description: "要交给 Hanako 的任务。" },
-        agentId: { type: "string", description: "可选：Hanako agent id，默认使用 hanako。" },
+        agentId: { type: "string", description: "可选：Hanako agent id（如 sol-architect, gemini-coder, cixiaogui, hanako 等），默认使用 hanako。" },
+        thinkingLevel: { type: "string", description: "可选：Hanako 思考挡位（如 off, low, medium, high, max）。" },
+        model: { type: "string", description: "可选：Hanako 模型 ID（如 gpt-6.1-sol, gemini-3.8-flash-high, gpt-5.6-luna）。" },
       },
       required: ["task"],
     },
@@ -1350,7 +1408,13 @@ async function handleRequest(request) {
     }
     else if (name === "codex_task") {
       if (typeof args.task !== "string" || !args.task.trim()) throw new Error("codex_task 需要非空 task。");
-      result = await runCodexTask({ task: args.task, cwd: args.cwd, signal: controller.signal });
+      result = await runCodexTask({
+        task: args.task,
+        cwd: args.cwd,
+        model: args.model,
+        effort: args.effort,
+        signal: controller.signal,
+      });
     } else if (name === "codex_new_thread") {
       if (typeof args.task !== "string" || !args.task.trim()) throw new Error("codex_new_thread 需要非空 task。");
       result = await runCodexNewThread({
@@ -1362,7 +1426,13 @@ async function handleRequest(request) {
       });
     } else if (name === "hanako_task") {
       if (typeof args.task !== "string" || !args.task.trim()) throw new Error("hanako_task 需要非空 task。");
-      result = await runHanakoTask({ task: args.task, agentId: args.agentId || "hanako", signal: controller.signal });
+      result = await runHanakoTask({
+        task: args.task,
+        agentId: args.agentId || "hanako",
+        thinkingLevel: args.thinkingLevel,
+        model: args.model,
+        signal: controller.signal,
+      });
     } else {
       throw new Error(`未知工具：${name}`);
     }
