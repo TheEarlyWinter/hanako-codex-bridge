@@ -2,6 +2,43 @@
 
 一个本地 MCP stdio 桥接器，让 Hanako 与 Codex 可以互相委派文字任务，并把最终结果返回给调用方。
 
+```text
+┌─────────────────┐                                  ┌─────────────────┐
+│                 │  ───(codex_new_thread / task)──> │                 │
+│   HanaAgent     │                                  │  Codex Desktop  │
+│  (Hana Studio)  │  <───────(hanako_task)────────── │   (CLI / App)   │
+│                 │                                  │                 │
+└────────┬────────┘                                  └────────▲────────┘
+         │                                                    │
+         └─────────────► [ bridge.mjs (stdio MCP) ] ──────────┘
+                         (100% 本地环回 · 零云端中转)
+```
+
+## 极速上手 (Quick Start)
+
+只需三步即可完成本地双向打通：
+
+1. **克隆项目到本地固定目录**：
+   ```bash
+   git clone https://github.com/TheEarlyWinter/hanako-codex-bridge.git
+   cd hanako-codex-bridge
+   ```
+
+2. **在 Codex 中添加 MCP 桥接器**：
+   编辑 `~/.codex/config.toml`（Windows 为 `%USERPROFILE%\.codex\config.toml`）：
+   ```toml
+   [mcp_servers.hanako-codex-bridge]
+   command = "node"
+   args = ["/path/to/hanako-codex-bridge/bridge.mjs"] # 替换为你本机的绝对路径
+   default_tools_approval_mode = "approve"
+   tool_timeout_sec = 900.0
+   ```
+
+3. **在 Hanako 中启用连接器**：
+   - 在 Hanako 设置 → MCP 连接器中添加 stdio 连接器，执行命令为 `node`，参数填 `bridge.mjs` 的绝对路径。
+   - 勾选授权给你需要协同的 Agent（如 `gemini-coder`、`hanako`）。
+   - 完成后即可在两边直接用自然语言互相派发任务。
+
 ## 功能
 
 - Hanako 调用 codex_task：启动一次性的本机 Codex 子任务。
@@ -31,8 +68,8 @@
 ## 系统要求
 
 - Windows、macOS 或 Linux
-- Node.js 22 或更新版本
-- 已安装并可运行的 Codex CLI
+- Node.js 22 或更新版本（使用内置 WebSocket，免 `npm install` 依赖）
+- 已安装并可运行的 Codex CLI（如果系统终端输入 `codex` 报 command not found，见下方 Linux 软链接解决方案）
 - Codex CLI 需要支持实验性的 app-server（codex_new_thread 使用该接口创建持久对话）
 - 正在运行的 Hanako，并且本机可读取 Hanako 的 server-info.json
 
@@ -224,9 +261,21 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 确认 Hanako 正在运行，并检查 server-info.json 是否存在、JSON 是否完整。可用 HANAKO_SERVER_INFO 指向自定义位置。
 
-### 找不到 Codex
+### 找不到 Codex（或 Linux 提示 command not found）
 
-确认 Codex CLI 已安装并在 PATH 中。也可以使用 CODEX_EXECUTABLE 指向 codex.exe 或 codex 的绝对路径。
+1. **检查 PATH**：终端执行 `codex --version` 确认 CLI 是否已在系统环境变量中。
+2. **Linux 官方桌面版常见路径**：官方安装包常将二进制存放在 `/usr/lib/chatgpt/resources/codex`，并未自动加入 PATH。可运行以下命令创建软链接：
+   ```bash
+   # 系统级软链接（需 root 权限）：
+   sudo ln -s /usr/lib/chatgpt/resources/codex /usr/local/bin/codex
+   
+   # 或当前用户级软链接：
+   ln -s /usr/lib/chatgpt/resources/codex ~/.local/bin/codex
+   ```
+3. **通过环境变量指定**：如果不想建软链接，可在启动环境或 `.bashrc` 中声明：
+   ```bash
+   export CODEX_EXECUTABLE=/usr/lib/chatgpt/resources/codex
+   ```
 
 ### MCP 工具调用需要审批
 
