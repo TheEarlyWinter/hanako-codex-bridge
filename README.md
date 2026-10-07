@@ -11,7 +11,7 @@
 └────────┬────────┘                                  └────────▲────────┘
          │                                                    │
          └─────────────► [ bridge.mjs (stdio MCP) ] ──────────┘
-                         (100% 本地环回 · 零云端中转)
+                         
 ```
 
 ## 极速上手 (Quick Start)
@@ -87,10 +87,8 @@ C:\Tools\hanako-codex-bridge\bridge.mjs
 
 ## 给其他人使用
 
-这个 GitHub 仓库可以公开分享，但它不是一个在线中转服务。别人克隆后需要在自己的电脑上完成本地安装和配置：
-
 1. 安装 Node.js 22+、Codex CLI 和 Hanako，并分别完成登录。
-2. 把 `bridge.mjs` 放在对方自己的固定目录。
+2. 把 `bridge.mjs` 放在自己的固定目录。
 3. 在 Codex 和 Hanako 的 MCP 设置中，把 `bridge.mjs` 的示例路径替换成对方自己的绝对路径。
 4. 确认 Hanako 正在运行，并让桥接器读取对方自己的 `%USERPROFILE%\\.hanako\\server-info.json`。
 5. 委派项目任务时使用对方自己的项目目录，或设置 `BRIDGE_DEFAULT_CWD`。
