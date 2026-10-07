@@ -153,12 +153,14 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 ### codex_task
 
-从 Hanako 或其他 MCP 客户端委派给 Codex：
+从 Hanako 或其他 MCP 客户端委派给 Codex（单次运行）：
 
 ~~~json
 {
   "task": "检查项目当前测试状态，并返回简短结论",
-  "cwd": "C:\\Work\\my-project"
+  "cwd": "/home/user/my-project",
+  "model": "gpt-6.1-sol",
+  "effort": "high"
 }
 ~~~
 
@@ -168,7 +170,9 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 
 ~~~json
 {
-  "agentId": "hakimi",
+  "agentId": "sol-architect",
+  "thinkingLevel": "high",
+  "model": "gpt-6.1-sol",
   "task": "阅读当前任务背景，给出一份简短的风险检查清单"
 }
 ~~~
@@ -178,11 +182,15 @@ Hanako 会优先调用 `codex_new_thread` 创建持久 Codex 对话。只有明�
 ### codex_new_thread
 
 从 Hanako 创建一个真正持久的 Codex 新任务：
+- 自动写入 Codex 桌面端的会话索引（`~/.codex/session_index.jsonl`），侧边栏即时可见。
+- 自动通过 `codex://threads/<threadId>` URL scheme 唤起并定位 Codex 客户端，无需重启应用。
 
 ~~~json
 {
   "task": "检查当前项目的测试状态，并把结论写成简短报告",
-  "cwd": "C:\\Work\\my-project"
+  "cwd": "/home/user/my-project",
+  "model": "gpt-6.1-sol",
+  "effort": "high"
 }
 ~~~
 
